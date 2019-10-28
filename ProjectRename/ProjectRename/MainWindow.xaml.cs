@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -13,6 +14,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace ProjectRename
 {
@@ -21,11 +23,11 @@ namespace ProjectRename
     /// </summary>
     public partial class MainWindow : Window
     {
-        public static int RenameFileContentCount; //重命名的文件内容数量
-        public static int RenameFileNameCount; //重命名文件名称的数量
-        public static int RenameDirectoryCount; //重命名目录数量
+        public int ModifyFileContentCount; //重命名的文件内容数量
+        public int ModifyFileNameCount; //重命名文件名称的数量
+        public int ModifyDirectoryCount; //重命名目录数量
         public static string SolutionSuffix= ".sln"; //解决方案后缀
-        public static string IgnoreDirectories= ".vs,.git,obj,bin"; //忽略目录
+        public static string IgnoreDirectories= ".vs,.vscode,.git,obj,bin,debug"; //忽略目录
 
         public MainWindow()
         {
@@ -60,8 +62,8 @@ namespace ProjectRename
         /// <param name="e"></param>
         private void Txt_PreviewDrop(object sender, DragEventArgs e)
         {
-            TextBox t = this.FindName("txtProjectPath") as TextBox;
-            t.Text = ((System.Array)e.Data.GetData(DataFormats.FileDrop)).GetValue(0).ToString();
+            TextBox txtProjectPath = this.FindName("txtProjectPath") as TextBox;
+            txtProjectPath.Text = ((System.Array)e.Data.GetData(DataFormats.FileDrop)).GetValue(0).ToString();
         }
 
 
@@ -74,6 +76,7 @@ namespace ProjectRename
         {
             try
             {
+                InitCount();
                 var path = (this.FindName("txtProjectPath") as TextBox)?.Text;
                 var newName = (this.FindName("txtNewName") as TextBox)?.Text;
                 if (string.IsNullOrWhiteSpace(path))
@@ -106,8 +109,8 @@ namespace ProjectRename
                     return;
                 }
                 
-                var msg = (RenameFileContentCount + RenameFileNameCount + RenameDirectoryCount) > 0
-                    ? $"重命名结束，本次修改文件如下。\n\r重命名文件名称数量为 {RenameFileNameCount}个 \n\r重命名目录名称数量为 {RenameDirectoryCount}个 \n\r修改文件内容的数量为 {RenameFileContentCount}个 "
+                var msg = (ModifyFileContentCount + ModifyFileNameCount + ModifyDirectoryCount) > 0
+                    ? $"重命名结束，本次修改文件如下。\n\r修改的文件名称数量为 {ModifyFileNameCount}个 \n\r修改的目录名称数量为 {ModifyDirectoryCount}个 \n\r修改的文件内容的数量为 {ModifyFileContentCount}个 "
                     : "未找到符合条件的文件和目录";
                 MessageBox.Show(msg);
             }
@@ -117,12 +120,20 @@ namespace ProjectRename
             }
         }
 
+        private void InitCount()
+        {
+            ModifyFileContentCount = 0;
+            ModifyFileNameCount = 0;
+            ModifyDirectoryCount = 0;
+        }
+
+
         /// <summary>
         /// 根据文件获取目录(不包含文件名的)
         /// </summary>
         /// <param name="filePath"></param>
         /// <returns></returns>
-        private static string GetDirectoryPathByFile(string filePath)
+        private string GetDirectoryPathByFile(string filePath)
         {
             return filePath.Substring(0, filePath.LastIndexOf("\\"));
         }
@@ -133,7 +144,7 @@ namespace ProjectRename
         /// <param name="targetInfo"></param>
         /// <param name="oldName"></param>
         /// <param name="newName"></param>
-        public static void RenameFileAndDirectoriesNames(DirectoryInfo targetInfo, string oldName, string newName)
+        public void RenameFileAndDirectoriesNames(DirectoryInfo targetInfo, string oldName, string newName)
         {
             #region 修改当前目录目录和文件
 
@@ -156,6 +167,10 @@ namespace ProjectRename
             //3.修改目录名称
             foreach (var directory in targetInfo.GetDirectories())
             {
+                //特定情况下，虽然目录里面文件重命名方法MoveTo返回了，但是底层的OS机制仍可能正在对该文件重命名，还未完成。
+                //这时如果在重命名改目录，会被报"拒绝访问路径",所以下面每次重命名目录时休眠一会
+                Thread.Sleep(100);
+
                 RenameDirectory(directory, oldName, newName);
             }
 
@@ -169,7 +184,7 @@ namespace ProjectRename
         /// <param name="file"></param>
         /// <param name="oldName"></param>
         /// <param name="newName"></param>
-        private static void RenameFileContent(FileInfo file, string oldName, string newName)
+        private void RenameFileContent(FileInfo file, string oldName, string newName)
         {
             var content = File.ReadAllText(file.FullName);
             if (!content.Contains(oldName))
@@ -184,7 +199,7 @@ namespace ProjectRename
                 sw.Close();
             }
 
-            RenameFileContentCount++;
+            ModifyFileContentCount++;
         }
 
         /// <summary>
@@ -193,9 +208,8 @@ namespace ProjectRename
         /// <param name="file"></param>
         /// <param name="oldName"></param>
         /// <param name="newName"></param>
-        private static void RenameFileName(FileInfo file, string oldName, string newName)
+        private void RenameFileName(FileInfo file, string oldName, string newName)
         {
-
             if (!file.Name.Contains(oldName))
             {
                 return;
@@ -204,7 +218,7 @@ namespace ProjectRename
             var newFileName = file.Name.Replace(oldName, newName);
             var newFileFullPath = System.IO.Path.Combine(GetDirectoryPathByFile(file.FullName), newFileName);
             file.MoveTo(newFileFullPath, true);
-            RenameFileNameCount++;
+            ModifyFileNameCount++;
         }
 
         /// <summary>
@@ -213,7 +227,7 @@ namespace ProjectRename
         /// <param name="directory"></param>
         /// <param name="oldName"></param>
         /// <param name="newName"></param>
-        private static void RenameDirectory(DirectoryInfo directory, string oldName, string newName)
+        private void RenameDirectory(DirectoryInfo directory, string oldName, string newName)
         {
             var directoryName = directory.Name;
             if (!directoryName.Contains(oldName))
@@ -223,10 +237,8 @@ namespace ProjectRename
 
             var newDirectoryFullPath = System.IO.Path.Combine(GetDirectoryPathByFile(directory.FullName),
                 directoryName.Replace(oldName, newName));
-
             directory.MoveTo(newDirectoryFullPath);
-            RenameDirectoryCount++;
-
+            ModifyDirectoryCount++;
         }
 
 
@@ -236,7 +248,7 @@ namespace ProjectRename
         /// <param name="targetInfo">DirectoryInfo</param>
         /// <param name="oldName">旧名字</param>
         /// <param name="newName">新名字</param>
-        private static void LoopModifyChildrenDirecoties(DirectoryInfo[] targetInfo, string oldName, string newName)
+        private void LoopModifyChildrenDirecoties(DirectoryInfo[] targetInfo, string oldName, string newName)
         {
             //递归，遍历子目录
             foreach (var item in targetInfo)
